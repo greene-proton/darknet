@@ -1,10 +1,11 @@
 #ifndef UTILS_H
 #define UTILS_H
-#include <stdio.h>
-#include <time.h>
+#include "darknet.h"
 #include "list.h"
 
-#include "darknet.h"
+#include <stdio.h>
+#include <time.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -70,7 +71,14 @@ void print_statistics(float *a, int n);
 unsigned int random_gen();
 float random_float();
 float rand_uniform_strong(float min, float max);
+float rand_precalc_random(float min, float max, float random_part);
+double double_rand(void);
+unsigned int uint_rand(unsigned int less_than);
+int check_array_is_nan(float *arr, int size);
+int check_array_is_inf(float *arr, int size);
 int int_index(int *a, int val, int n);
+int *random_index_order(int min, int max);
+int max_int_index(int *a, int n);
 
 #ifdef __cplusplus
 }

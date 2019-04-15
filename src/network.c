@@ -1,7 +1,9 @@
+#include "darknet.h"
+
 #include <stdio.h>
 #include <time.h>
 #include <assert.h>
-#include "darknet.h"
+
 #include "network.h"
 #include "image.h"
 #include "data.h"
@@ -117,6 +119,12 @@ float get_current_rate(network net)
             return net.learning_rate * pow(rand_uniform(0,1), net.power);
         case SIG:
             return net.learning_rate * (1./(1.+exp(net.gamma*(batch_num - net.step))));
+        case SGDR:
+            rate = net.learning_rate_min +
+                        0.5*(net.learning_rate-net.learning_rate_min)
+                        * (1. + cos( (float) (batch_num % net.batches_per_cycle)*3.14159265 / net.batches_per_cycle));
+
+            return rate;
         default:
             fprintf(stderr, "Policy is weird!\n");
             return net.learning_rate;
@@ -317,6 +325,11 @@ float train_network_sgd(network net, data d, int n)
 
 float train_network(network net, data d)
 {
+    return train_network_waitkey(net, d, 0);
+}
+
+float train_network_waitkey(network net, data d, int wait_key)
+{
     assert(d.X.rows % net.batch == 0);
     int batch = net.batch;
     int n = d.X.rows / batch;
@@ -329,6 +342,7 @@ float train_network(network net, data d)
         get_next_batch(d, batch, i*batch, X, y);
         float err = train_network_datum(net, X, y);
         sum += err;
+        if(wait_key) wait_key_cv(5);
     }
     free(X);
     free(y);
@@ -348,7 +362,7 @@ float train_network_batch(network net, data d, int n)
     int batch = 2;
     for(i = 0; i < n; ++i){
         for(j = 0; j < batch; ++j){
-            int index = rand()%d.X.rows;
+            int index = random_gen()%d.X.rows;
             state.input = d.X.vals[index];
             state.truth = d.y.vals[index];
             forward_network(net, state);
@@ -452,6 +466,9 @@ int resize_network(network *net, int w, int h)
         //printf(" %d: layer = %d,", i, l.type);
         if(l.type == CONVOLUTIONAL){
             resize_convolutional_layer(&l, w, h);
+        }
+        else if (l.type == CRNN) {
+            resize_crnn_layer(&l, w, h);
         }else if(l.type == CROP){
             resize_crop_layer(&l, w, h);
         }else if(l.type == MAXPOOL){
@@ -485,8 +502,8 @@ int resize_network(network *net, int w, int h)
         h = l.out_h;
         if(l.type == AVGPOOL) break;
     }
-    const int size = get_network_input_size(*net) * net->batch;
 #ifdef GPU
+    const int size = get_network_input_size(*net) * net->batch;
     if(gpu_index >= 0){
         printf(" try to allocate additional workspace_size = %1.2f MB \n", (float)workspace_size / 1000000);
         net->workspace = cuda_make_array(0, workspace_size/sizeof(float) + 1);
@@ -725,10 +742,10 @@ char *detection_to_json(detection *dets, int nboxes, int classes, char **names, 
 
     char *send_buf = (char *)calloc(1024, sizeof(char));
     if (filename) {
-        sprintf(send_buf, "{\n \"frame_id\":%d, \n \"filename\":\"%s\", \n \"objects\": [ \n", frame_id, filename);
+        sprintf(send_buf, "{\n \"frame_id\":%lld, \n \"filename\":\"%s\", \n \"objects\": [ \n", frame_id, filename);
     }
     else {
-        sprintf(send_buf, "{\n \"frame_id\":%d, \n \"objects\": [ \n", frame_id);
+        sprintf(send_buf, "{\n \"frame_id\":%lld, \n \"objects\": [ \n", frame_id);
     }
 
     int i, j;
@@ -1017,6 +1034,51 @@ void calculate_binary_weights(network net)
     //printf("\n calculate_binary_weights Done! \n");
 
 }
+
+void copy_cudnn_descriptors(layer src, layer *dst)
+{
+#ifdef CUDNN
+    dst->normTensorDesc = src.normTensorDesc;
+    dst->normDstTensorDesc = src.normDstTensorDesc;
+    dst->normDstTensorDescF16 = src.normDstTensorDescF16;
+
+    dst->srcTensorDesc = src.srcTensorDesc;
+    dst->dstTensorDesc = src.dstTensorDesc;
+
+    dst->srcTensorDesc16 = src.srcTensorDesc16;
+    dst->dstTensorDesc16 = src.dstTensorDesc16;
+#endif // CUDNN
+}
+
+void copy_weights_net(network net_train, network *net_map)
+{
+    int k;
+    for (k = 0; k < net_train.n; ++k) {
+        layer *l = &(net_train.layers[k]);
+        layer tmp_layer;
+        copy_cudnn_descriptors(net_map->layers[k], &tmp_layer);
+        net_map->layers[k] = net_train.layers[k];
+        copy_cudnn_descriptors(tmp_layer, &net_map->layers[k]);
+
+        if (l->type == CRNN) {
+            layer tmp_input_layer, tmp_self_layer, tmp_output_layer;
+            copy_cudnn_descriptors(*net_map->layers[k].input_layer, &tmp_input_layer);
+            copy_cudnn_descriptors(*net_map->layers[k].self_layer, &tmp_self_layer);
+            copy_cudnn_descriptors(*net_map->layers[k].output_layer, &tmp_output_layer);
+            net_map->layers[k].input_layer = net_train.layers[k].input_layer;
+            net_map->layers[k].self_layer = net_train.layers[k].self_layer;
+            net_map->layers[k].output_layer = net_train.layers[k].output_layer;
+            //net_map->layers[k].output_gpu = net_map->layers[k].output_layer->output_gpu;  // already copied out of if()
+
+            copy_cudnn_descriptors(tmp_input_layer, net_map->layers[k].input_layer);
+            copy_cudnn_descriptors(tmp_self_layer, net_map->layers[k].self_layer);
+            copy_cudnn_descriptors(tmp_output_layer, net_map->layers[k].output_layer);
+        }
+        net_map->layers[k].batch = 1;
+        net_map->layers[k].steps = 1;
+    }
+}
+
 
 // combine Training and Validation networks
 network combine_train_valid_networks(network net_train, network net_map)

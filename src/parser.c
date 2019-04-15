@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 #include "activation_layer.h"
 #include "activations.h"
@@ -32,8 +33,8 @@
 #include "softmax_layer.h"
 #include "utils.h"
 #include "upsample_layer.h"
+#include "version.h"
 #include "yolo_layer.h"
-#include <stdint.h>
 
 typedef struct{
     char *type;
@@ -184,15 +185,18 @@ layer parse_crnn(list *options, size_params params)
 {
     int size = option_find_int_quiet(options, "size", 3);
     int stride = option_find_int_quiet(options, "stride", 1);
-    int pad = option_find_int_quiet(options, "pad", 1);
+    int pad = option_find_int_quiet(options, "pad", 0);
+    int padding = option_find_int_quiet(options, "padding", 0);
+    if (pad) padding = size / 2;
 
     int output_filters = option_find_int(options, "output",1);
     int hidden_filters = option_find_int(options, "hidden",1);
     char *activation_s = option_find_str(options, "activation", "logistic");
     ACTIVATION activation = get_activation(activation_s);
     int batch_normalize = option_find_int_quiet(options, "batch_normalize", 0);
+    int xnor = option_find_int_quiet(options, "xnor", 0);
 
-    layer l = make_crnn_layer(params.batch, params.w, params.h, params.c, hidden_filters, output_filters, params.time_steps, size, stride, pad, activation, batch_normalize);
+    layer l = make_crnn_layer(params.batch, params.w, params.h, params.c, hidden_filters, output_filters, params.time_steps, size, stride, padding, activation, batch_normalize, xnor);
 
     l.shortcut = option_find_int_quiet(options, "shortcut", 0);
 
@@ -626,6 +630,7 @@ learning_rate_policy get_policy(char *s)
     if (strcmp(s, "exp")==0) return EXP;
     if (strcmp(s, "sigmoid")==0) return SIG;
     if (strcmp(s, "steps")==0) return STEPS;
+    if (strcmp(s, "sgdr")==0) return SGDR;
     fprintf(stderr, "Couldn't find policy %s, going with constant\n", s);
     return CONSTANT;
 }
@@ -634,10 +639,15 @@ void parse_net_options(list *options, network *net)
 {
     net->batch = option_find_int(options, "batch",1);
     net->learning_rate = option_find_float(options, "learning_rate", .001);
+    net->learning_rate_min = option_find_float_quiet(options, "learning_rate_min", .00001);
+    net->batches_per_cycle = option_find_int_quiet(options, "sgdr_cycle", 500);
     net->momentum = option_find_float(options, "momentum", .9);
     net->decay = option_find_float(options, "decay", .0001);
     int subdivs = option_find_int(options, "subdivisions",1);
     net->time_steps = option_find_int_quiet(options, "time_steps",1);
+    net->track = option_find_int_quiet(options, "track", 0);
+    net->augment_speed = option_find_int_quiet(options, "augment_speed", 2);
+    net->try_fix_nan = option_find_int_quiet(options, "try_fix_nan", 0);
     net->batch /= subdivs;
     net->batch *= net->time_steps;
     net->subdivisions = subdivs;
@@ -657,7 +667,6 @@ void parse_net_options(list *options, network *net)
     net->min_crop = option_find_int_quiet(options, "min_crop",net->w);
     net->flip = option_find_int_quiet(options, "flip", 1);
 
-    net->small_object = option_find_int_quiet(options, "small_object", 0);
     net->angle = option_find_float_quiet(options, "angle", 0);
     net->aspect = option_find_float_quiet(options, "aspect", 1);
     net->saturation = option_find_float_quiet(options, "saturation", 1);
@@ -748,6 +757,7 @@ network parse_network_cfg_custom(char *filename, int batch, int time_steps)
     params.inputs = net.inputs;
     if (batch > 0) net.batch = batch;
     if (time_steps > 0) net.time_steps = time_steps;
+    if (net.batch < net.time_steps) net.batch = net.time_steps;
     params.batch = net.batch;
     params.time_steps = net.time_steps;
     params.net = net;
@@ -984,10 +994,10 @@ void save_convolutional_weights(layer l, FILE *fp)
         fwrite(l.rolling_variance, sizeof(float), l.n, fp);
     }
     fwrite(l.weights, sizeof(float), num, fp);
-    if(l.adam){
-        fwrite(l.m, sizeof(float), num, fp);
-        fwrite(l.v, sizeof(float), num, fp);
-    }
+    //if(l.adam){
+    //    fwrite(l.m, sizeof(float), num, fp);
+    //    fwrite(l.v, sizeof(float), num, fp);
+    //}
 }
 
 void save_batchnorm_weights(layer l, FILE *fp)
@@ -1029,9 +1039,9 @@ void save_weights_upto(network net, char *filename, int cutoff)
     FILE *fp = fopen(filename, "wb");
     if(!fp) file_error(filename);
 
-    int major = 0;
-    int minor = 2;
-    int revision = 5;
+    int major = MAJOR_VERSION;
+    int minor = MINOR_VERSION;
+    int revision = PATCH_VERSION;
     fwrite(&major, sizeof(int), 1, fp);
     fwrite(&minor, sizeof(int), 1, fp);
     fwrite(&revision, sizeof(int), 1, fp);
@@ -1198,10 +1208,10 @@ void load_convolutional_weights(layer l, FILE *fp)
         }
     }
     fread(l.weights, sizeof(float), num, fp);
-    if(l.adam){
-        fread(l.m, sizeof(float), num, fp);
-        fread(l.v, sizeof(float), num, fp);
-    }
+    //if(l.adam){
+    //    fread(l.m, sizeof(float), num, fp);
+    //    fread(l.v, sizeof(float), num, fp);
+    //}
     //if(l.c == 3) scal_cpu(num, 1./256, l.weights, 1);
     if (l.flipped) {
         transpose_matrix(l.weights, l.c*l.size*l.size, l.n);

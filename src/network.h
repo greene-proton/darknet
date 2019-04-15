@@ -116,6 +116,7 @@ void backward_network(network net, network_state state);
 void update_network(network net);
 
 float train_network(network net, data d);
+float train_network_waitkey(network net, data d, int wait_key);
 float train_network_batch(network net, data d, int n);
 float train_network_sgd(network net, data d, int n);
 float train_network_datum(network net, float *x, float *y);
@@ -161,6 +162,7 @@ int get_network_background(network net);
 //LIB_API void fuse_conv_batchnorm(network net);
 //LIB_API void calculate_binary_weights(network net);
 network combine_train_valid_networks(network net_train, network net_map);
+void copy_weights_net(network net_train, network *net_map);
 
 #ifdef __cplusplus
 }

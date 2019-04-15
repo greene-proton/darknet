@@ -8,12 +8,26 @@ int gpu_index = 0;
 
 #ifdef GPU
 
-#include "cuda.h"
+#include "dark_cuda.h"
 #include "utils.h"
 #include "blas.h"
 #include "assert.h"
 #include <stdlib.h>
 #include <time.h>
+#include <cuda.h>
+#include <stdio.h>
+
+#pragma comment(lib, "cuda.lib")
+
+#ifdef CUDNN
+#ifndef USE_CMAKE_LIBS
+#pragma comment(lib, "cudnn.lib")
+#endif  // USE_CMAKE_LIBS
+#endif  // CUDNN
+
+#if defined(CUDNN_HALF) && !defined(CUDNN)
+#error "If you set CUDNN_HALF=1 then you must set CUDNN=1"
+#endif
 
 void cuda_set_device(int n)
 {
@@ -28,6 +42,14 @@ int cuda_get_device()
     cudaError_t status = cudaGetDevice(&n);
     CHECK_CUDA(status);
     return n;
+}
+
+void *cuda_get_context()
+{
+    CUcontext pctx;
+    CUresult status = cuCtxGetCurrent(&pctx);
+    if(status != CUDA_SUCCESS) fprintf(stderr, " Error: cuCtxGetCurrent() is failed \n");
+    return (void *)pctx;
 }
 
 void check_error(cudaError_t status)
@@ -59,8 +81,10 @@ void check_error(cudaError_t status)
 
 void check_error_extended(cudaError_t status, const char *file, int line, const char *date_time)
 {
-    if (status != cudaSuccess)
+    if (status != cudaSuccess) {
         printf("CUDA status Error: file: %s() : line: %d : build time: %s \n", file, line, date_time);
+        check_error(status);
+    }
 #ifdef DEBUG
     status = cudaDeviceSynchronize();
     if (status != cudaSuccess)
@@ -175,8 +199,10 @@ void cudnn_check_error(cudnnStatus_t status)
 
 void cudnn_check_error_extended(cudnnStatus_t status, const char *file, int line, const char *date_time)
 {
-    if (status != CUDNN_STATUS_SUCCESS)
+    if (status != CUDNN_STATUS_SUCCESS) {
         printf("\n cuDNN status Error in: file: %s() : line: %d : build time: %s \n", file, line, date_time);
+        cudnn_check_error(status);
+    }
 #ifdef DEBUG
     status = cudaDeviceSynchronize();
     if (status != CUDNN_STATUS_SUCCESS)

@@ -8,12 +8,6 @@
 #include <stdio.h>
 #include <time.h>
 
-#ifdef CUDNN
-#ifndef USE_CMAKE_LIBS
-#pragma comment(lib, "cudnn.lib")
-#endif
-#endif
-
 #ifdef AI2
 #include "xnor_layer.h"
 #endif
@@ -348,11 +342,13 @@ convolutional_layer make_convolutional_layer(int batch, int steps, int h, int w,
     l.xnor = xnor;
     l.use_bin_output = use_bin_output;
     l.batch = batch;
+    l.steps = steps;
     l.stride = stride;
     l.size = size;
     l.pad = padding;
     l.batch_normalize = batch_normalize;
     l.learning_rate_scale = 1;
+    l.nweights = l.c*l.n*l.size*l.size;
 
     l.weights = (float*)calloc(c * n * size * size, sizeof(float));
     l.weight_updates = (float*)calloc(c * n * size * size, sizeof(float));
@@ -544,6 +540,7 @@ void test_convolutional_layer()
 
 void resize_convolutional_layer(convolutional_layer *l, int w, int h)
 {
+    int total_batch = l->batch*l->steps;
     int old_w = l->w;
     int old_h = l->h;
     l->w = w;
@@ -557,11 +554,11 @@ void resize_convolutional_layer(convolutional_layer *l, int w, int h)
     l->outputs = l->out_h * l->out_w * l->out_c;
     l->inputs = l->w * l->h * l->c;
 
-    l->output = (float*)realloc(l->output, l->batch * l->outputs * sizeof(float));
-    l->delta = (float*)realloc(l->delta, l->batch * l->outputs * sizeof(float));
+    l->output = (float*)realloc(l->output, total_batch * l->outputs * sizeof(float));
+    l->delta = (float*)realloc(l->delta, total_batch * l->outputs * sizeof(float));
     if(l->batch_normalize){
-        l->x = (float*)realloc(l->x, l->batch * l->outputs * sizeof(float));
-        l->x_norm = (float*)realloc(l->x_norm, l->batch * l->outputs * sizeof(float));
+        l->x = (float*)realloc(l->x, total_batch * l->outputs * sizeof(float));
+        l->x_norm = (float*)realloc(l->x_norm, total_batch * l->outputs * sizeof(float));
     }
 
     if (l->xnor) {
@@ -573,15 +570,15 @@ void resize_convolutional_layer(convolutional_layer *l, int w, int h)
         cuda_free(l->delta_gpu);
         cuda_free(l->output_gpu);
 
-        l->delta_gpu = cuda_make_array(l->delta, l->batch*l->outputs);
-        l->output_gpu = cuda_make_array(l->output, l->batch*l->outputs);
+        l->delta_gpu = cuda_make_array(l->delta, total_batch*l->outputs);
+        l->output_gpu = cuda_make_array(l->output, total_batch*l->outputs);
 
         if (l->batch_normalize) {
             cuda_free(l->x_gpu);
             cuda_free(l->x_norm_gpu);
 
-            l->x_gpu = cuda_make_array(l->output, l->batch*l->outputs);
-            l->x_norm_gpu = cuda_make_array(l->output, l->batch*l->outputs);
+            l->x_gpu = cuda_make_array(l->output, total_batch*l->outputs);
+            l->x_norm_gpu = cuda_make_array(l->output, total_batch*l->outputs);
         }
 
         if (l->xnor) {
@@ -682,7 +679,7 @@ void float_to_bit(float *src, unsigned char *dst, size_t size) {
 
 void bit_to_float(unsigned char *src, float *dst, size_t size, size_t filters, float *mean_arr) {
     memset(dst, 0, size *sizeof(float));
-    size_t i,  src_i, src_shift;
+    size_t i;
 
     for (i = 0; i < size; ++i) {
         float mean_val = 1;
@@ -729,7 +726,7 @@ void binary_align_weights(convolutional_layer *l)
                 const int items_per_channel = l->size*l->size;
                 for (i = 0; i < items_per_channel; ++i)
                 {
-                    uint32_t val = 0;
+                    //uint32_t val = 0;
                     int c_pack;
                     for (c_pack = 0; c_pack < 32; ++c_pack) {
                         float src = l->binary_weights[fil*items_per_filter + (chan + c_pack)*items_per_channel + i];
@@ -752,8 +749,8 @@ void binary_align_weights(convolutional_layer *l)
         //if (l->n >= 32)
         if(gpu_index >= 0)
         {
-            int M = l->n;
-            int N = l->out_w*l->out_h;
+            //int M = l->n;
+            //int N = l->out_w*l->out_h;
             //printf("\n M = %d, N = %d, M %% 8 = %d, N %% 8 = %d - weights \n", M, N, M % 8, N % 8);
             //printf("\n l.w = %d, l.c = %d, l.n = %d \n", l->w, l->c, l->n);
             for (i = 0; i < align_weights_size / 8; ++i) l->align_bit_weights[i] = ~(l->align_bit_weights[i]);
@@ -809,7 +806,7 @@ size_t binary_transpose_align_input(int k, int n, float *b, char **t_bit_input, 
     size_t t_bit_input_size = t_intput_size / 8;// +1;
 
     memset(*t_bit_input, 0, t_bit_input_size * sizeof(char));
-    int src_size = k * bit_align;
+    //int src_size = k * bit_align;
 
     // b - [bit_align, k] - [l.bit_align, l.size*l.size*l.c] = src_size
     // t_input - [bit_align, k] - [n', k]
@@ -865,8 +862,8 @@ void forward_convolutional_layer(convolutional_layer l, network_state state)
 
                 int ldb_align = l.lda_align;
                 size_t new_ldb = k + (ldb_align - k%ldb_align); // (k / 8 + 1) * 8;
-                size_t t_intput_size = new_ldb * l.bit_align;// n;
-                size_t t_bit_input_size = t_intput_size / 8;// +1;
+                //size_t t_intput_size = new_ldb * l.bit_align;// n;
+                //size_t t_bit_input_size = t_intput_size / 8;// +1;
 
                 int re_packed_input_size = l.c * l.w * l.h;
                 memset(state.workspace, 0, re_packed_input_size * sizeof(float));
@@ -931,17 +928,18 @@ void forward_convolutional_layer(convolutional_layer l, network_state state)
                 //im2col_cpu_custom_align(state.input, l.c, l.h, l.w, l.size, l.stride, l.pad, b, l.bit_align);
                 im2col_cpu_custom_bin(state.input, l.c, l.h, l.w, l.size, l.stride, l.pad, state.workspace, l.bit_align);
 
-                size_t output_size = l.outputs;
+                //size_t output_size = l.outputs;
                 //float *count_output = calloc(output_size, sizeof(float));
                 //size_t bit_output_size = output_size / 8 + 1;
                 //char *bit_output = calloc(bit_output_size, sizeof(char));
 
-                size_t intput_size = n * k; // (out_h*out_w) X (l.size*l.size*l.c) : after im2col()
-                size_t bit_input_size = intput_size / 8 + 1;
+                //size_t intput_size = n * k; // (out_h*out_w) X (l.size*l.size*l.c) : after im2col()
+                //size_t bit_input_size = intput_size / 8 + 1;
                 //char *bit_input = calloc(bit_input_size, sizeof(char));
 
-                size_t weights_size = k * m; //l.size*l.size*l.c*l.n;
-                size_t bit_weights_size = weights_size / 8 + 1;
+                //size_t weights_size = k * m; //l.size*l.size*l.c*l.n;
+                //size_t bit_weights_size = weights_size / 8 + 1;
+
                 //char *bit_weights = calloc(bit_weights_size, sizeof(char));
                 //float *mean_arr = calloc(l.n, sizeof(float));
 

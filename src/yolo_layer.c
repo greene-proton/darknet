@@ -2,7 +2,7 @@
 #include "activations.h"
 #include "blas.h"
 #include "box.h"
-#include "cuda.h"
+#include "dark_cuda.h"
 #include "utils.h"
 
 #include <stdio.h>
@@ -70,7 +70,7 @@ layer make_yolo_layer(int batch, int w, int h, int n, int total, int *mask, int 
 #endif
 
     fprintf(stderr, "yolo\n");
-    srand(0);
+    srand(time(0));
 
     return l;
 }

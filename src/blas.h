@@ -1,7 +1,7 @@
 #ifndef BLAS_H
 #define BLAS_H
 #ifdef GPU
-#include "cuda.h"
+#include "dark_cuda.h"
 #include "tree.h"
 #endif
 #ifdef __cplusplus
@@ -101,6 +101,9 @@ void flatten_ongpu(float *x, int spatial, int layers, int batch, int forward, fl
 void upsample_gpu(float *in, int w, int h, int c, int batch, int stride, int forward, float scale, float *out);
 
 void softmax_tree_gpu(float *input, int spatial, int batch, int stride, float temp, float *output, tree hier);
+
+void fix_nan_and_inf(float *input, size_t size);
+int is_nan_or_inf(float *input, size_t size);
 
 #endif
 #ifdef __cplusplus

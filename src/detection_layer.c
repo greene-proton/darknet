@@ -3,7 +3,7 @@
 #include "softmax_layer.h"
 #include "blas.h"
 #include "box.h"
-#include "cuda.h"
+#include "dark_cuda.h"
 #include "utils.h"
 #include <stdio.h>
 #include <assert.h>
@@ -41,7 +41,7 @@ detection_layer make_detection_layer(int batch, int inputs, int n, int side, int
 #endif
 
     fprintf(stderr, "Detection Layer\n");
-    srand(0);
+    srand(time(0));
 
     return l;
 }
